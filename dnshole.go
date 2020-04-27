@@ -116,8 +116,8 @@ func init() {
 	}
 }
 
-// callConcurrently calls fcn count times with at most 3 instances of
-// fcn running concurrently.
+// callConcurrently calls fcn count times with at most concurrency
+// instances of fcn running concurrently.
 func callConcurrently(concurrency int, count int, fcn func(int)) {
 	semaphore := make(chan struct{}, concurrency)
 	done := make(chan struct{})
