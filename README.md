@@ -23,11 +23,14 @@ Usage: dnshole: [flags]
 Flags:
   -config string
     	Configuration file name (default "/etc/dnshole.conf")
-  -dryrun
-    	Create /etc/hosts.dnshole, but do not overwrite /etc/hosts.
   -help
     	Show this usage description.
+  -output string
+    	Output file name, "-" means stdout
 ```
+
+if an output file name is not specified on the command line, /etc/hosts is
+overwritten.
 
 ## Author
 Dale Farnsworth

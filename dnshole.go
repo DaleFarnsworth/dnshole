@@ -60,6 +60,7 @@ func getExistingHostDomains() []string {
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer host.Close()
 
 	domains := make([]string, 0)
 	scanner := bufio.NewScanner(host)
@@ -238,10 +239,22 @@ func createNewHostsFile(domains []string) {
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer host.Close()
 
-	newHost, err := os.Create(newHostsFilename)
-	if err != nil {
-		log.Fatal(err)
+	outname := newHostsFilename
+
+	if outputFilename != "" {
+		outname = outputFilename
+	}
+
+	var newHost *os.File
+	if outname == "-" {
+		newHost = os.Stdout
+	} else {
+		newHost, err = os.Create(outname)
+		if err != nil {
+			log.Fatal(err)
+		}
 	}
 
 	var lastLine string
@@ -272,6 +285,10 @@ func createNewHostsFile(domains []string) {
 
 	for _, domain := range domains {
 		fmt.Fprintf(newHost, "0.0.0.0 %s\n", domain)
+	}
+
+	if err := newHost.Close(); err != nil {
+		log.Fatal(err)
 	}
 }
 
@@ -326,7 +343,7 @@ func processConfigLine(line string, filename string, lineCount int) {
 
 // readConfig reads and processes dnshole's config file.
 func readConfig(filename string) {
-	config, err := os.Open(configFileName)
+	config, err := os.Open(configFilename)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -346,25 +363,19 @@ func readConfig(filename string) {
 	}
 }
 
-// configFileName holds the name of dnshole's config file.
-var configFileName string
+// configFilename holds the name of dnshole's config file.
+var configFilename string
+
+// outputFilename holds the name of a specified output file
+var outputFilename string
 
 // wantHelp causes a help message to be printed if true.
 var wantHelp bool
-
-// dryRun prevents overwriting the original hosts file if true.
-var dryRun bool
 
 // This init function initialize the log and flag packages.
 func init() {
 	log.SetPrefix(filepath.Base(os.Args[0]) + ": ")
 	log.SetFlags(log.Lshortfile)
-
-	flag.StringVar(&configFileName,
-		"config",
-		"/etc/dnshole.conf",
-		"Configuration file name",
-	)
 
 	flag.BoolVar(&wantHelp,
 		"help",
@@ -372,10 +383,16 @@ func init() {
 		"Show this usage description.",
 	)
 
-	flag.BoolVar(&dryRun,
-		"dryrun",
-		false,
-		fmt.Sprintf("Create %s, but do not overwrite %s.", newHostsFilename, hostsFilename),
+	flag.StringVar(&configFilename,
+		"config",
+		"/etc/dnshole.conf",
+		"Configuration file name",
+	)
+
+	flag.StringVar(&outputFilename,
+		"output",
+		"",
+		"Output file name, \"-\" means stdout",
 	)
 
 	flag.Usage = func() {
@@ -396,14 +413,11 @@ func main() {
 		flag.Usage()
 	}
 
-	readConfig(configFileName)
+	readConfig(configFilename)
 	domains := getDomains()
 	createNewHostsFile(domains)
 
-	if dryRun {
-		fmt.Printf("New host file created in %s\n", newHostsFilename)
-		return
+	if outputFilename == "" {
+		os.Rename(newHostsFilename, hostsFilename)
 	}
-
-	os.Rename(newHostsFilename, hostsFilename)
 }
