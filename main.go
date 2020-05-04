@@ -37,10 +37,7 @@ import (
 )
 
 // hostsFilename is the name of the system's hosts file.
-const hostsFilename = "/etc/hosts"
-
-// newHostsFilename is where dnshole writes a new hosts file.
-const newHostsFilename = "/etc/hosts.dnshole"
+const defaultHostsFilename = "/etc/hosts"
 
 // dnsholeMarkerLine separates the original hosts contents from
 // the additional content added by dnshole.
@@ -49,6 +46,8 @@ const dnsholeMarkerLine = "# ==== dnshole ===="
 // concurrency is the maximum number of urls to retrieve concurrently.
 var concurrency int
 
+var inputOutputSameFile bool
+
 // keepDomainMap contains the list of domains that dnshole should not
 // override.  It is a map to facilitate fast lookup.
 var keepDomainMap map[string]bool
@@ -56,7 +55,7 @@ var keepDomainMap map[string]bool
 // getExistingHostDomains returns a slice containing the domain names
 // specified in the original hosts file.
 func getExistingHostDomains() []string {
-	host, err := os.Open(hostsFilename)
+	host, err := os.Open(inputFilename)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -89,7 +88,7 @@ func getExistingHostDomains() []string {
 }
 
 // This function initializes keepDomainMap
-func init() {
+func populateKeepDomainMap() {
 	keepDomains := []string{
 		"localhost",
 		"localhost.localdomain",
@@ -235,23 +234,30 @@ func getDomains() []string {
 // createNewHostsFile copies the original hosts file to newHostsFilename
 // and then adds the new dnshole domains to it.
 func createNewHostsFile(domains []string) {
-	host, err := os.Open(hostsFilename)
+	var err error
+	host, err := os.Open(inputFilename)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer host.Close()
 
-	outname := newHostsFilename
-
-	if outputFilename != "" {
-		outname = outputFilename
-	}
-
 	var newHost *os.File
-	if outname == "-" {
+	if outputFilename == "-" {
 		newHost = os.Stdout
 	} else {
-		newHost, err = os.Create(outname)
+		inputStat, err := os.Stat(inputFilename)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		outputStat, err := os.Stat(outputFilename)
+		if err == nil && os.SameFile(inputStat, outputStat) {
+			inputOutputSameFile = true
+			dir := filepath.Dir(inputFilename)
+			outputFilename = filepath.Join(dir, "dnshole_tmp_hosts")
+		}
+
+		newHost, err = os.Create(outputFilename)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -366,6 +372,9 @@ func readConfig(filename string) {
 // configFilename holds the name of dnshole's config file.
 var configFilename string
 
+// inputFilename holds the name of a specified input file
+var inputFilename string
+
 // outputFilename holds the name of a specified output file
 var outputFilename string
 
@@ -389,10 +398,16 @@ func init() {
 		"Configuration file name",
 	)
 
+	flag.StringVar(&inputFilename,
+		"input",
+		defaultHostsFilename,
+		"Input file name",
+	)
+
 	flag.StringVar(&outputFilename,
 		"output",
 		"",
-		"Output file name, \"-\" means stdout",
+		"Output file name, \"-\" means stdout (default same as input)",
 	)
 
 	flag.Usage = func() {
@@ -413,11 +428,19 @@ func main() {
 		flag.Usage()
 	}
 
+	if outputFilename == "" {
+		outputFilename = inputFilename
+	}
+
 	readConfig(configFilename)
+
+	populateKeepDomainMap()
+
 	domains := getDomains()
 	createNewHostsFile(domains)
 
-	if outputFilename == "" {
-		os.Rename(newHostsFilename, hostsFilename)
+	if inputOutputSameFile {
+		fmt.Printf("rename %s %s\n", outputFilename, inputFilename)
+		os.Rename(outputFilename, inputFilename)
 	}
 }
