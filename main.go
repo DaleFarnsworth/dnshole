@@ -440,7 +440,6 @@ func main() {
 	createNewHostsFile(domains)
 
 	if inputOutputSameFile {
-		fmt.Printf("rename %s %s\n", outputFilename, inputFilename)
 		os.Rename(outputFilename, inputFilename)
 	}
 }
