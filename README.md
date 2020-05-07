@@ -25,8 +25,10 @@ Flags:
     	Configuration file name (default "/etc/dnshole.conf")
   -help
     	Show this usage description.
+  -input string
+    	Input file name (default "/etc/hosts")
   -output string
-    	Output file name, "-" means stdout
+    	Output file name, "-" means stdout (default same as input)
 ```
 
 if an output file name is not specified on the command line, /etc/hosts is
