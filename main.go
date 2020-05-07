@@ -48,9 +48,9 @@ var concurrency int
 
 var inputOutputSameFile bool
 
-// keepDomainMap contains the list of domains that dnshole should not
+// whitelistMap contains the list of domains that dnshole should not
 // override.  It is a map to facilitate fast lookup.
-var keepDomainMap map[string]bool
+var whitelistMap map[string]bool
 
 // getExistingHostDomains returns a slice containing the domain names
 // specified in the original hosts file.
@@ -87,7 +87,7 @@ func getExistingHostDomains() []string {
 	return domains
 }
 
-// This function initializes keepDomainMap
+// This function initializes whitelistMap
 func populateKeepDomainMap() {
 	keepDomains := []string{
 		"localhost",
@@ -104,14 +104,13 @@ func populateKeepDomainMap() {
 		"0.0.0.0",
 	}
 
-	keepDomainMap = make(map[string]bool)
 	for _, domain := range keepDomains {
-		keepDomainMap[domain] = true
+		whitelistMap[domain] = true
 	}
 
 	hostDomains := getExistingHostDomains()
 	for _, domain := range hostDomains {
-		keepDomainMap[domain] = true
+		whitelistMap[domain] = true
 	}
 }
 
@@ -173,7 +172,7 @@ func parseDomain(line string, fieldIndex int) string {
 	}
 
 	domain := fields[fieldIndex]
-	if keepDomainMap[domain] {
+	if whitelistMap[domain] {
 		return ""
 	}
 
@@ -341,6 +340,12 @@ func processConfigLine(line string, filename string, lineCount int) {
 			log.Fatalf("%s:%d: non-numeric concurrency\n", filename, lineCount)
 		}
 
+	case "whitelist":
+		if len(fields) != 2 {
+			log.Fatalf("%s:%d: wrong number of fields\n", filename, lineCount)
+		}
+		whitelistMap[fields[1]] = true
+
 	default:
 		log.Fatalf("%s:%d: unknown directive: %s\n", filename, lineCount, fields[0])
 	}
@@ -356,6 +361,7 @@ func readConfig(filename string) {
 	defer config.Close()
 
 	listDescs = make([]listDesc, 0)
+	whitelistMap = make(map[string]bool)
 
 	lineCounter := 1
 	scanner := bufio.NewScanner(config)
@@ -432,6 +438,7 @@ func main() {
 		outputFilename = inputFilename
 	}
 
+	whitelistMap = make(map[string]bool)
 	readConfig(configFilename)
 
 	populateKeepDomainMap()
