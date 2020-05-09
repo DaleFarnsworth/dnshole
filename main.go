@@ -25,6 +25,7 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -36,86 +37,17 @@ import (
 	"time"
 )
 
-// hostsFilename is the name of the system's hosts file.
-const defaultHostsFilename = "/etc/hosts"
-
 // dnsholeMarkerLine separates the original hosts contents from
 // the additional content added by dnshole.
 const dnsholeMarkerLine = "# ==== dnshole ===="
 
-// concurrency is the maximum number of urls to retrieve concurrently.
+const (
+	white = iota
+	black
+)
+
+// concurrency is the maximum number of files/urls to retrieve concurrently.
 var concurrency int
-
-var inputOutputSameFile bool
-
-// whitelistMap contains the list of domains that dnshole should not
-// override.  It is a map to facilitate fast lookup.
-var whitelistMap map[string]bool
-
-// whitelistWildcards contains whitelist entries beginning with '*'
-var whitelistWildcards []string
-
-// getExistingHostDomains returns a slice containing the domain names
-// specified in the original hosts file.
-func getExistingHostDomains() []string {
-	host, err := os.Open(inputFilename)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer host.Close()
-
-	domains := make([]string, 0)
-	scanner := bufio.NewScanner(host)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.HasPrefix(line, dnsholeMarkerLine) {
-			break
-		}
-		if strings.HasPrefix(line, "#") {
-			continue
-		}
-		fields := strings.Fields(line)
-		if len(fields) < 2 {
-			continue
-		}
-		for _, domain := range fields[1:] {
-			domains = append(domains, domain)
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		log.Fatal(err)
-	}
-
-	return domains
-}
-
-// This function initializes whitelistMap
-func populateKeepDomainMap() {
-	keepDomains := []string{
-		"localhost",
-		"localhost.localdomain",
-		"local",
-		"broadcasthost",
-		"ip6-localhost",
-		"ip6-loopback",
-		"ip6-localnet",
-		"ip6-mcastprefix",
-		"ip6-allnodes",
-		"ip6-allrouters",
-		"ip6-allhosts",
-		"0.0.0.0",
-	}
-
-	for _, domain := range keepDomains {
-		whitelistMap[domain] = true
-	}
-
-	hostDomains := getExistingHostDomains()
-	for _, domain := range hostDomains {
-		whitelistMap[domain] = true
-	}
-}
 
 // callConcurrently calls fcn count times with at most concurrency
 // instances of fcn running concurrently.
@@ -158,6 +90,7 @@ var client = &http.Client{
 type listDesc struct {
 	url        string // The url containing the list of domains.
 	fieldIndex int    // The, space separated, index of the domain on a line, origin 1.
+	whiteBlack int    // whether the list is a whitelist or a blacklist
 }
 
 // listDescs holds all of the list descripters read from the config file.
@@ -174,41 +107,48 @@ func parseDomain(line string, fieldIndex int) string {
 		return ""
 	}
 
-	domain := fields[fieldIndex]
-	if whitelistMap[domain] {
-		return ""
-	}
-
-	for _, wil := range whitelistWildcards {
-		if strings.HasSuffix(domain, wil[1:]) {
-			return ""
-		}
-	}
-
-	return domain
+	return fields[fieldIndex]
 }
 
-// getDomains returns all of the domain names from the urls contained
-// in listDescs.
-func getDomains() []string {
-	domainsList := make([][]string, len(listDescs))
+// getBlacklistDomains returns all of the domain names in the
+// blacklisted urls and not in the whitelisted urls of listDescs.
+func getBlacklistDomains() []string {
+	whiteDomainsList := make([][]string, 0)
+	blackDomainsList := make([][]string, 0)
 
 	callConcurrently(concurrency, len(listDescs), func(i int) {
 		url := listDescs[i].url
-		fieldIndex := listDescs[i].fieldIndex
+		index := listDescs[i].fieldIndex
+		wb := listDescs[i].whiteBlack
 
-		res, err := client.Get(url)
-		if err == nil && res.StatusCode != 200 {
-			err = fmt.Errorf("Get \"%s\" returned status %d", url, res.StatusCode)
-		}
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: %s\n", err)
-			return
+		var reader io.Reader
+		if !strings.Contains(url, "://") {
+			file, err := os.Open(url)
+			if err != nil {
+				log.Fatal(err)
+			}
+			reader = file
+		} else {
+			res, err := client.Get(url)
+			if err == nil && res.StatusCode != 200 {
+				err = fmt.Errorf("Get \"%s\" returned status %d", url, res.StatusCode)
+			}
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: %s\n", err)
+				return
+			}
+			reader = res.Body
 		}
 		domains := make([]string, 0)
-		scanner := bufio.NewScanner(res.Body)
+		scanner := bufio.NewScanner(reader)
 		for scanner.Scan() {
-			domain := parseDomain(scanner.Text(), fieldIndex)
+			line := scanner.Text()
+			if wb == white {
+				if strings.HasPrefix(line, dnsholeMarkerLine) {
+					break
+				}
+			}
+			domain := parseDomain(line, index)
 			if domain != "" {
 				domains = append(domains, domain)
 			}
@@ -218,32 +158,63 @@ func getDomains() []string {
 			log.Fatal(err)
 		}
 
-		domainsList[i] = domains
+		switch wb {
+		case white:
+			whiteDomainsList = append(whiteDomainsList, domains)
+		case black:
+			blackDomainsList = append(blackDomainsList, domains)
+		}
 	})
 
-	domainMap := make(map[string]bool)
-
-	for _, domains := range domainsList {
+	whiteDomainMap := make(map[string]bool)
+	for _, domains := range whiteDomainsList {
 		for _, domain := range domains {
-			domainMap[domain] = true
+			whiteDomainMap[domain] = true
 		}
 	}
 
-	domains := make([]string, 0)
-	for domain := range domainMap {
-		domains = append(domains, domain)
+	blackDomainMap := make(map[string]bool)
+	for _, domains := range blackDomainsList {
+		for _, domain := range domains {
+			if !whiteDomainMap[domain] {
+				blackDomainMap[domain] = true
+			}
+		}
 	}
 
-	sort.Strings(domains)
+	blackDomains := make([]string, 0)
+	for domain := range blackDomainMap {
+		blackDomains = append(blackDomains, domain)
+	}
 
-	return domains
+	sort.Strings(blackDomains)
+
+	return blackDomains
+}
+
+func sameFile(filenameA, filenameB string) bool {
+	inputStat, err := os.Stat(hostsFilename)
+	if err != nil {
+		return false
+	}
+
+	outputStat, err := os.Stat(outputFilename)
+	if err != nil {
+		return false
+	}
+
+	if !os.SameFile(inputStat, outputStat) {
+		return false
+	}
+
+	return true
 }
 
 // createNewHostsFile copies the original hosts file to newHostsFilename
-// and then adds the new dnshole domains to it.
-func createNewHostsFile(domains []string) {
+// and then adds the new blacklisted domains to it.
+func createNewHostsFile(outputFilename string, domains []string) {
 	var err error
-	host, err := os.Open(inputFilename)
+	host, err := os.Open(hostsFilename)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -253,18 +224,6 @@ func createNewHostsFile(domains []string) {
 	if outputFilename == "-" {
 		newHost = os.Stdout
 	} else {
-		inputStat, err := os.Stat(inputFilename)
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		outputStat, err := os.Stat(outputFilename)
-		if err == nil && os.SameFile(inputStat, outputStat) {
-			inputOutputSameFile = true
-			dir := filepath.Dir(inputFilename)
-			outputFilename = filepath.Join(dir, "dnshole_tmp_hosts")
-		}
-
 		newHost, err = os.Create(outputFilename)
 		if err != nil {
 			log.Fatal(err)
@@ -306,14 +265,29 @@ func createNewHostsFile(domains []string) {
 	}
 }
 
-// blankRE holds a compiled regexp matching a line containing only whitespace.
 var blankRE *regexp.Regexp
 
 func init() {
 	blankRE = regexp.MustCompile(`^\s*$`)
 }
 
-// processConfigLine processes a single config file line contained in line.
+func appendListDesc(whiteBlack int, fields []string, filename string, lineCount int) {
+	if len(fields) != 3 {
+		log.Fatalf("%s:%d: wrong number of fields\n", filename, lineCount)
+	}
+	fieldIndex, err := strconv.Atoi(fields[1])
+	if err != nil {
+		log.Fatalf("%s:%d: non-numeric field index\n", filename, lineCount)
+	}
+	fieldIndex -= 1
+	if fieldIndex < 0 {
+		log.Fatalf("%s:%d: field index must be greater than 0\n", filename, lineCount)
+	}
+	url := fields[2]
+
+	listDescs = append(listDescs, listDesc{url, fieldIndex, whiteBlack})
+}
+
 func processConfigLine(line string, filename string, lineCount int) {
 	if strings.HasPrefix(line, "#") {
 		return
@@ -324,20 +298,11 @@ func processConfigLine(line string, filename string, lineCount int) {
 
 	fields := strings.Fields(line)
 	switch strings.ToLower(fields[0]) {
-	case "list":
-		if len(fields) != 3 {
-			log.Fatalf("%s:%d: wrong number of fields\n", filename, lineCount)
-		}
-		fieldIndex, err := strconv.Atoi(fields[1])
-		if err != nil {
-			log.Fatalf("%s:%d: non-numeric field index\n", filename, lineCount)
-		}
-		fieldIndex -= 1
-		if fieldIndex < 0 {
-			log.Fatalf("%s:%d: field index must be greater than 0\n", filename, lineCount)
-		}
-		url := fields[2]
-		listDescs = append(listDescs, listDesc{url, fieldIndex})
+	case "whitelist":
+		appendListDesc(white, fields, filename, lineCount)
+
+	case "blacklist":
+		appendListDesc(black, fields, filename, lineCount)
 
 	case "concurrency":
 		if len(fields) != 2 {
@@ -349,61 +314,13 @@ func processConfigLine(line string, filename string, lineCount int) {
 			log.Fatalf("%s:%d: non-numeric concurrency\n", filename, lineCount)
 		}
 
-	case "whitelist":
-		if len(fields) != 2 {
-			log.Fatalf("%s:%d: wrong number of fields\n", filename, lineCount)
-		}
-		domain := fields[1]
-		if domain[0] == '*' {
-			whitelistWildcards = append(whitelistWildcards, domain)
-		} else {
-			whitelistMap[domain] = true
-		}
-
-	case "whitelistfile":
-		if len(fields) != 2 {
-			log.Fatalf("%s:%d: wrong number of fields\n", filename, lineCount)
-		}
-		readWhitelistFile(fields[1])
-
 	default:
 		log.Fatalf("%s:%d: unknown directive: %s\n", filename, lineCount, fields[0])
 	}
 
 }
 
-func readWhitelistFile(filename string) {
-	whitefile, err := os.Open(filename)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer whitefile.Close()
-
-	scanner := bufio.NewScanner(whitefile)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.HasPrefix(line, "#") {
-			continue
-		}
-		fields := strings.Fields(line)
-		if len(fields) != 1 {
-			continue
-		}
-		domain := fields[0]
-		if domain[0] == '*' {
-			whitelistWildcards = append(whitelistWildcards, domain)
-		} else {
-			whitelistMap[domain] = true
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		log.Fatal(err)
-	}
-}
-
-// readConfig reads and processes dnshole's config file.
-func readConfig(filename string) {
+func readConfigFile(filename string) {
 	config, err := os.Open(configFilename)
 	if err != nil {
 		log.Fatal(err)
@@ -411,8 +328,6 @@ func readConfig(filename string) {
 	defer config.Close()
 
 	listDescs = make([]listDesc, 0)
-	whitelistMap = make(map[string]bool)
-	whitelistWildcards = make([]string, 0)
 
 	lineCounter := 1
 	scanner := bufio.NewScanner(config)
@@ -426,19 +341,14 @@ func readConfig(filename string) {
 	}
 }
 
-// configFilename holds the name of dnshole's config file.
 var configFilename string
 
-// inputFilename holds the name of a specified input file
-var inputFilename string
+var hostsFilename string
 
-// outputFilename holds the name of a specified output file
 var outputFilename string
 
-// wantHelp causes a help message to be printed if true.
 var wantHelp bool
 
-// This init function initialize the log and flag packages.
 func init() {
 	log.SetPrefix(filepath.Base(os.Args[0]) + ": ")
 	log.SetFlags(log.Lshortfile)
@@ -451,25 +361,19 @@ func init() {
 
 	flag.StringVar(&configFilename,
 		"config",
-		"/etc/dnshole.conf",
+		"/etc/dnshole/dnshole.conf",
 		"Configuration file name",
-	)
-
-	flag.StringVar(&inputFilename,
-		"input",
-		defaultHostsFilename,
-		"Input file name",
 	)
 
 	flag.StringVar(&outputFilename,
 		"output",
 		"",
-		"Output file name, \"-\" means stdout (default same as input)",
+		"Output file name, \"-\" means stdout (default is <hosts_filename>)",
 	)
 
 	flag.Usage = func() {
 		_, _ = fmt.Fprintf(os.Stderr,
-			"Usage: %s: [flags] [<input file name>]\n",
+			"Usage: %s: [flags] <hosts_filename>\n",
 			os.Args[0])
 
 		fmt.Fprintln(os.Stderr, "Flags:")
@@ -478,40 +382,32 @@ func init() {
 	}
 }
 
-// main directs the overall execution of the program.
 func main() {
 	flag.Parse()
 
-	if wantHelp {
+	if len(flag.Args()) != 1 || wantHelp {
 		flag.Usage()
 	}
 
-	switch len(flag.Args()) {
-	case 0:
-
-	case 1:
-		if inputFilename != defaultHostsFilename {
-			flag.Usage()
-		}
-		inputFilename = flag.Args()[0]
-
-	default:
-		flag.Usage()
-	}
+	hostsFilename = flag.Args()[0]
 
 	if outputFilename == "" {
-		outputFilename = inputFilename
+		outputFilename = hostsFilename
 	}
 
-	whitelistMap = make(map[string]bool)
-	readConfig(configFilename)
+	readConfigFile(configFilename)
 
-	populateKeepDomainMap()
+	// whitelist the domains already in the hosts file
+	listDescs = append(listDescs, listDesc{hostsFilename, 2, white})
 
-	domains := getDomains()
-	createNewHostsFile(domains)
+	domains := getBlacklistDomains()
 
-	if inputOutputSameFile {
-		os.Rename(outputFilename, inputFilename)
+	if !sameFile(hostsFilename, outputFilename) {
+		createNewHostsFile(outputFilename, domains)
+	} else {
+		dir := filepath.Dir(hostsFilename)
+		outputFilename = filepath.Join(dir, "dnshole_tmp_hosts")
+		createNewHostsFile(outputFilename, domains)
+		os.Rename(outputFilename, hostsFilename)
 	}
 }

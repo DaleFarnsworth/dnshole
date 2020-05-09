@@ -2,7 +2,7 @@
 
 ## Introduction
 dnshole fetches lists of ad and malware domains, merges them, and
-adds them to the local /etc/hosts file with an ip address that
+adds them to the specified hosts file with an ip address that
 references localhost.
 
 The machine's dns search order should give priority to the hosts
@@ -19,20 +19,17 @@ malware.
 
 ## Usage
 ```
-Usage: dnshole: [flags]
+Usage: dnshole: [flags] <hosts_filename>
 Flags:
   -config string
-    	Configuration file name (default "/etc/dnshole.conf")
+    	Configuration file name (default "/etc/dnshole/dnshole.conf")
   -help
     	Show this usage description.
-  -input string
-    	Input file name (default "/etc/hosts")
   -output string
-    	Output file name, "-" means stdout (default same as input)
+    	Output file name, "-" means stdout (default is <hosts_filename>)
 ```
 
-if an output file name is not specified on the command line, /etc/hosts is
-overwritten.
+Unless -output is given, the specified hosts file is overwritten.
 
 ## Author
 Dale Farnsworth
