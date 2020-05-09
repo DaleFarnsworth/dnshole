@@ -23,6 +23,7 @@ package main
 
 import (
 	"bufio"
+	"crypto/tls"
 	"flag"
 	"fmt"
 	"io"
@@ -75,16 +76,6 @@ func callConcurrently(concurrency int, count int, fcn func(int)) {
 	}
 }
 
-var tr = &http.Transport{
-	TLSHandshakeTimeout:   time.Duration(30) * time.Second,
-	ResponseHeaderTimeout: time.Duration(30) * time.Second,
-}
-
-var client = &http.Client{
-	Transport: tr,
-	Timeout:   time.Duration(120) * time.Second,
-}
-
 // listDesc contains the information needed to fetch and parse a list
 // of domains.
 type listDesc struct {
@@ -113,6 +104,19 @@ func parseDomain(line string, fieldIndex int) string {
 // getBlacklistDomains returns all of the domain names in the
 // blacklisted urls and not in the whitelisted urls of listDescs.
 func getBlacklistDomains() []string {
+	tr := http.DefaultTransport.(*http.Transport)
+	tr.TLSHandshakeTimeout = time.Duration(30) * time.Second
+	tr.ResponseHeaderTimeout = time.Duration(30) * time.Second
+
+	client := &http.Client{
+		Transport: tr,
+		Timeout:   time.Duration(120) * time.Second,
+	}
+
+	if insecureSSL {
+		tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	}
+
 	whiteDomainsList := make([][]string, 0)
 	blackDomainsList := make([][]string, 0)
 
@@ -342,12 +346,10 @@ func readConfigFile(filename string) {
 }
 
 var configFilename string
-
 var hostsFilename string
-
 var outputFilename string
-
 var wantHelp bool
+var insecureSSL bool
 
 func init() {
 	log.SetPrefix(filepath.Base(os.Args[0]) + ": ")
@@ -357,6 +359,12 @@ func init() {
 		"help",
 		false,
 		"Show this usage description.",
+	)
+
+	flag.BoolVar(&insecureSSL,
+		"insecure-ssl",
+		false,
+		"Ignore problems with host security certificates",
 	)
 
 	flag.StringVar(&configFilename,

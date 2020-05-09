@@ -25,6 +25,8 @@ Flags:
     	Configuration file name (default "/etc/dnshole/dnshole.conf")
   -help
     	Show this usage description.
+  -insecure
+    	Ignore problems with host security certificates
   -output string
     	Output file name, "-" means stdout (default is <hosts_filename>)
 ```
