@@ -87,18 +87,18 @@ type listDesc struct {
 // listDescs holds all of the list descripters read from the config file.
 var listDescs []listDesc
 
-// parseDomain returns the domain name from field fieldIndex on a line.
-func parseDomain(line string, fieldIndex int) string {
-	if strings.HasPrefix(line, "#") {
-		return ""
+// parseDomains returns the domain names from field fieldIndex on a line.
+func parseDomains(line string, fieldIndex int) []string {
+	i := strings.Index(line, "#")
+	if i >= 0 {
+		line = line[:i]
 	}
 
 	fields := strings.Fields(line)
 	if fieldIndex >= len(fields) {
-		return ""
+		return nil
 	}
-
-	return fields[fieldIndex]
+	return fields[fieldIndex:]
 }
 
 // getBlacklistDomains returns all of the domain names in the
@@ -152,10 +152,9 @@ func getBlacklistDomains() []string {
 					break
 				}
 			}
-			domain := parseDomain(line, index)
-			if domain != "" {
-				domains = append(domains, domain)
-			}
+
+			parsedDomains := parseDomains(line, index)
+			domains = append(domains, parsedDomains...)
 		}
 
 		if err := scanner.Err(); err != nil {
