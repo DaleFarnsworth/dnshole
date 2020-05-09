@@ -196,17 +196,17 @@ func getBlacklistDomains() []string {
 }
 
 func sameFile(filenameA, filenameB string) bool {
-	inputStat, err := os.Stat(hostsFilename)
+	statA, err := os.Stat(filenameA)
 	if err != nil {
 		return false
 	}
 
-	outputStat, err := os.Stat(outputFilename)
+	statB, err := os.Stat(filenameB)
 	if err != nil {
 		return false
 	}
 
-	if !os.SameFile(inputStat, outputStat) {
+	if !os.SameFile(statA, statB) {
 		return false
 	}
 
