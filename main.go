@@ -353,17 +353,53 @@ func processConfigLine(line string, filename string, lineCount int) {
 		if len(fields) != 2 {
 			log.Fatalf("%s:%d: wrong number of fields\n", filename, lineCount)
 		}
-		whiteDomain := fields[1]
-		if whiteDomain[0] == '*' {
-			whitelistWildcards = append(whitelistWildcards, whiteDomain)
+		domain := fields[1]
+		if domain[0] == '*' {
+			whitelistWildcards = append(whitelistWildcards, domain)
 		} else {
-			whitelistMap[fields[1]] = true
+			whitelistMap[domain] = true
 		}
+
+	case "whitelistfile":
+		if len(fields) != 2 {
+			log.Fatalf("%s:%d: wrong number of fields\n", filename, lineCount)
+		}
+		readWhitelistFile(fields[1])
 
 	default:
 		log.Fatalf("%s:%d: unknown directive: %s\n", filename, lineCount, fields[0])
 	}
 
+}
+
+func readWhitelistFile(filename string) {
+	whitefile, err := os.Open(filename)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer whitefile.Close()
+
+	scanner := bufio.NewScanner(whitefile)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) != 1 {
+			continue
+		}
+		domain := fields[0]
+		if domain[0] == '*' {
+			whitelistWildcards = append(whitelistWildcards, domain)
+		} else {
+			whitelistMap[domain] = true
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		log.Fatal(err)
+	}
 }
 
 // readConfig reads and processes dnshole's config file.
