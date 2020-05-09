@@ -52,6 +52,9 @@ var inputOutputSameFile bool
 // override.  It is a map to facilitate fast lookup.
 var whitelistMap map[string]bool
 
+// whitelistWildcards contains whitelist entries beginning with '*'
+var whitelistWildcards []string
+
 // getExistingHostDomains returns a slice containing the domain names
 // specified in the original hosts file.
 func getExistingHostDomains() []string {
@@ -174,6 +177,12 @@ func parseDomain(line string, fieldIndex int) string {
 	domain := fields[fieldIndex]
 	if whitelistMap[domain] {
 		return ""
+	}
+
+	for _, wil := range whitelistWildcards {
+		if strings.HasSuffix(domain, wil[1:]) {
+			return ""
+		}
 	}
 
 	return domain
@@ -344,7 +353,12 @@ func processConfigLine(line string, filename string, lineCount int) {
 		if len(fields) != 2 {
 			log.Fatalf("%s:%d: wrong number of fields\n", filename, lineCount)
 		}
-		whitelistMap[fields[1]] = true
+		whiteDomain := fields[1]
+		if whiteDomain[0] == '*' {
+			whitelistWildcards = append(whitelistWildcards, whiteDomain)
+		} else {
+			whitelistMap[fields[1]] = true
+		}
 
 	default:
 		log.Fatalf("%s:%d: unknown directive: %s\n", filename, lineCount, fields[0])
@@ -362,6 +376,7 @@ func readConfig(filename string) {
 
 	listDescs = make([]listDesc, 0)
 	whitelistMap = make(map[string]bool)
+	whitelistWildcards = make([]string, 0)
 
 	lineCounter := 1
 	scanner := bufio.NewScanner(config)
@@ -418,7 +433,7 @@ func init() {
 
 	flag.Usage = func() {
 		_, _ = fmt.Fprintf(os.Stderr,
-			"Usage: %s: [flags]\n",
+			"Usage: %s: [flags] [<input file name>]\n",
 			os.Args[0])
 
 		fmt.Fprintln(os.Stderr, "Flags:")
@@ -430,7 +445,21 @@ func init() {
 // main directs the overall execution of the program.
 func main() {
 	flag.Parse()
-	if len(flag.Args()) != 0 || wantHelp {
+
+	if wantHelp {
+		flag.Usage()
+	}
+
+	switch len(flag.Args()) {
+	case 0:
+
+	case 1:
+		if inputFilename != defaultHostsFilename {
+			flag.Usage()
+		}
+		inputFilename = flag.Args()[0]
+
+	default:
 		flag.Usage()
 	}
 
