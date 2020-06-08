@@ -43,8 +43,8 @@ import (
 const dnsholeMarkerLine = "# ==== dnshole ===="
 
 const (
-	white = iota
-	black
+	allow = iota
+	block
 )
 
 // concurrency is the maximum number of files/urls to retrieve concurrently.
@@ -81,7 +81,7 @@ func callConcurrently(concurrency int, count int, fcn func(int)) {
 type listDesc struct {
 	url        string // The url containing the list of domains.
 	fieldIndex int    // The, space separated, index of the domain on a line, origin 1.
-	whiteBlack int    // whether the list is a whitelist or a blacklist
+	allowBlock int    // whether the list is a allowlist or a blocklist
 }
 
 // listDescs holds all of the list descripters read from the config file.
@@ -101,9 +101,9 @@ func parseDomains(line string, fieldIndex int) []string {
 	return fields[fieldIndex:]
 }
 
-// getBlacklistDomains returns all of the domain names in the
-// blacklisted urls and not in the whitelisted urls of listDescs.
-func getBlacklistDomains() []string {
+// getBlocklistDomains returns all of the domain names in the
+// blocklisted urls and not in the allowlisted urls of listDescs.
+func getBlocklistDomains() []string {
 	tr := http.DefaultTransport.(*http.Transport)
 	tr.TLSHandshakeTimeout = time.Duration(30) * time.Second
 	tr.ResponseHeaderTimeout = time.Duration(30) * time.Second
@@ -117,13 +117,13 @@ func getBlacklistDomains() []string {
 		tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 	}
 
-	whiteDomainsList := make([][]string, 0)
-	blackDomainsList := make([][]string, 0)
+	allowDomainsList := make([][]string, 0)
+	blockDomainsList := make([][]string, 0)
 
 	callConcurrently(concurrency, len(listDescs), func(i int) {
 		url := listDescs[i].url
 		index := listDescs[i].fieldIndex
-		wb := listDescs[i].whiteBlack
+		wb := listDescs[i].allowBlock
 
 		var reader io.Reader
 		if !strings.Contains(url, "://") {
@@ -147,7 +147,7 @@ func getBlacklistDomains() []string {
 		scanner := bufio.NewScanner(reader)
 		for scanner.Scan() {
 			line := scanner.Text()
-			if wb == white {
+			if wb == allow {
 				if strings.HasPrefix(line, dnsholeMarkerLine) {
 					break
 				}
@@ -162,37 +162,37 @@ func getBlacklistDomains() []string {
 		}
 
 		switch wb {
-		case white:
-			whiteDomainsList = append(whiteDomainsList, domains)
-		case black:
-			blackDomainsList = append(blackDomainsList, domains)
+		case allow:
+			allowDomainsList = append(allowDomainsList, domains)
+		case block:
+			blockDomainsList = append(blockDomainsList, domains)
 		}
 	})
 
-	whiteDomainMap := make(map[string]bool)
-	for _, domains := range whiteDomainsList {
+	allowDomainMap := make(map[string]bool)
+	for _, domains := range allowDomainsList {
 		for _, domain := range domains {
-			whiteDomainMap[domain] = true
+			allowDomainMap[domain] = true
 		}
 	}
 
-	blackDomainMap := make(map[string]bool)
-	for _, domains := range blackDomainsList {
+	blockDomainMap := make(map[string]bool)
+	for _, domains := range blockDomainsList {
 		for _, domain := range domains {
-			if !whiteDomainMap[domain] {
-				blackDomainMap[domain] = true
+			if !allowDomainMap[domain] {
+				blockDomainMap[domain] = true
 			}
 		}
 	}
 
-	blackDomains := make([]string, 0)
-	for domain := range blackDomainMap {
-		blackDomains = append(blackDomains, domain)
+	blockDomains := make([]string, 0)
+	for domain := range blockDomainMap {
+		blockDomains = append(blockDomains, domain)
 	}
 
-	sort.Strings(blackDomains)
+	sort.Strings(blockDomains)
 
-	return blackDomains
+	return blockDomains
 }
 
 func sameFile(filenameA, filenameB string) bool {
@@ -214,7 +214,7 @@ func sameFile(filenameA, filenameB string) bool {
 }
 
 // createNewHostsFile copies the original hosts file to newHostsFilename
-// and then adds the new blacklisted domains to it.
+// and then adds the new blocklisted domains to it.
 func createNewHostsFile(outputFilename string, domains []string) {
 	var err error
 	host, err := os.Open(hostsFilename)
@@ -274,7 +274,7 @@ func init() {
 	blankRE = regexp.MustCompile(`^\s*$`)
 }
 
-func appendListDesc(whiteBlack int, fields []string, filename string, lineCount int) {
+func appendListDesc(allowBlock int, fields []string, filename string, lineCount int) {
 	if len(fields) != 3 {
 		log.Fatalf("%s:%d: wrong number of fields\n", filename, lineCount)
 	}
@@ -288,7 +288,7 @@ func appendListDesc(whiteBlack int, fields []string, filename string, lineCount 
 	}
 	url := fields[2]
 
-	listDescs = append(listDescs, listDesc{url, fieldIndex, whiteBlack})
+	listDescs = append(listDescs, listDesc{url, fieldIndex, allowBlock})
 }
 
 func processConfigLine(line string, filename string, lineCount int) {
@@ -301,11 +301,11 @@ func processConfigLine(line string, filename string, lineCount int) {
 
 	fields := strings.Fields(line)
 	switch strings.ToLower(fields[0]) {
-	case "whitelist":
-		appendListDesc(white, fields, filename, lineCount)
+	case "allowlist":
+		appendListDesc(allow, fields, filename, lineCount)
 
-	case "blacklist":
-		appendListDesc(black, fields, filename, lineCount)
+	case "blocklist":
+		appendListDesc(block, fields, filename, lineCount)
 
 	case "concurrency":
 		if len(fields) != 2 {
@@ -404,10 +404,10 @@ func main() {
 
 	readConfigFile(configFilename)
 
-	// whitelist the domains already in the hosts file
-	listDescs = append(listDescs, listDesc{hostsFilename, 2, white})
+	// allowlist the domains already in the hosts file
+	listDescs = append(listDescs, listDesc{hostsFilename, 2, allow})
 
-	domains := getBlacklistDomains()
+	domains := getBlocklistDomains()
 
 	if !sameFile(hostsFilename, outputFilename) {
 		createNewHostsFile(outputFilename, domains)
